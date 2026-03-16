@@ -1,0 +1,122 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag (e.g. v1.2.3)'
+        required: true
+      release_body:
+        description: 'Release notes'
+        required: false
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install PySide6 pyinstaller
+
+      - name: Download Android platform-tools (Windows)
+        shell: pwsh
+        run: |
+          $url = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
+          Invoke-WebRequest -Uri $url -OutFile platform-tools-windows.zip
+          Expand-Archive -Path platform-tools-windows.zip -DestinationPath .
+          # The zip contains a single folder called "platform-tools" — rename it
+          Rename-Item -Path "platform-tools" -NewName "platform-tools-windows"
+
+      - name: Build (Windows)
+        run: pyinstaller --onefile .\hypemyos.py --add-data "platform-tools-windows;platform-tools-windows"
+
+      - name: Rename artifact
+        run: Rename-Item -Path "dist\hypemyos.exe" -NewName "hypemyos-windows.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypemyos-windows
+          path: dist/hypemyos-windows.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install PySide6 pyinstaller
+          sudo apt-get install -y libgl1
+
+      - name: Download Android platform-tools (Linux)
+        run: |
+          curl -o platform-tools-linux.zip \
+            https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+          unzip platform-tools-linux.zip
+          # The zip contains a single folder called "platform-tools" — rename it
+          mv platform-tools platform-tools-linux
+
+      - name: Build (Linux)
+        run: pyinstaller --onefile hypemyos.py --add-data "platform-tools-linux:platform-tools-linux"
+
+      - name: Rename artifact
+        run: mv dist/hypemyos dist/hypemyos-linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypemyos-linux
+          path: dist/hypemyos-linux
+
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ github.event.inputs.tag }}
+          git push origin ${{ github.event.inputs.tag }}
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hypemyos-windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hypemyos-linux
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          body: ${{ github.event.inputs.release_body }}
+          files: |
+            hypemyos-windows.exe
+            hypemyos-linux
